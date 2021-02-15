@@ -1,0 +1,270 @@
+       /// <summary>
+        /// Use this variant to create the service from the supplied
+        /// instance. This allows for custom construction. The interface
+        /// that the serviceHost will offer is the typeof(T)
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="implementingInstance"></param>
+        /// <param name="baseAddress"></param>
+        /// <param name="locator"></param>
+        /// <returns>The service host</returns>
+        public static ServiceHost getServiceHostFromInstance<T>(T implementingInstance, string baseAddress, IServiceLocator locator)
+        {
+            //Create the service host.
+            log.Info("Creating service host from instance.");
+            var serviceHost = new ServiceHost(implementingInstance, new Uri(baseAddress));
+
+            string fullAddress = baseAddress;
+            EventLog.WriteEntry("Service", "Listening on [" + fullAddress + "]", EventLogEntryType.Information, 234);
+            serviceHost.AddServiceEndpoint(typeof(T), new NetTcpBinding(SecurityMode.None), typeof(T).Name);
+
+            ServiceThrottlingBehavior throttleBehavior = new ServiceThrottlingBehavior
+            {
+                MaxConcurrentCalls = 2500,
+                MaxConcurrentInstances = 200,
+                MaxConcurrentSessions = 2500,
+            };
+            serviceHost.Description.Behaviors.Add(throttleBehavior);
+
+            locator.AdvertiseEndPoint(serviceHost, false);
+            return serviceHost;
+        }
+        
+        /// <summary>
+        /// Simple base addresss formatter.
+        /// </summary>
+        /// <param name="serviceName">Service name - e.g. "OrderRouter"</param>
+        /// <param name="port">Port you want to advertise your service on.</param>
+        /// <returns></returns>
+        public static string formatTCPBaseAddress(string serviceName, int port)
+        {
+            return string.Format("net.tcp://{0}:{1}/{2}", Network.GetHostNameIncludingDomain(), port, serviceName);
+        }
+
+        /// <summary>
+        /// This helper function uses the environment on the machine to setup
+        /// an appropriate service host for that environment. You should use this
+        /// to create the service host for a WCF server in an environment-safe way.
+        /// test
+        /// </summary>
+        /// <param name="serviceInterface">The service contract interface this service will offer</param>
+        /// <param name="implementingClass"></param>
+        /// <param name="baseAddress">A base address for the service.</param>
+        /// <param name="locator"></param>
+        /// <returns></returns>
+        public static ServiceHost getServiceHost(Type serviceInterface, Type implementingClass, string baseAddress, IServiceLocator locator, 
+            bool multipleInstance = false)
+        {
+            //Create the service host.
+            log.Info("Creating service host");
+            var serviceHost = new ServiceHost(implementingClass, new Uri(baseAddress));
+
+            string fullAddress = baseAddress + "/" + serviceInterface.Name;
+            log.Info("End point is at [" + fullAddress + "]");
+            serviceHost.AddServiceEndpoint(serviceInterface,
+                new NetTcpBinding(SecurityMode.None), serviceInterface.Name);
+
+            locator.AdvertiseEndPoint(serviceHost, multipleInstance);
+            return serviceHost;
+        }
+
+        /// <summary>
+        /// This will create a service host for you creating the end point and the bindings. 
+        /// It won't start the service - you have to do that.
+        /// Writes end point out using the locator - so currently we use the file based and end points are written to
+        /// \\10.11.100.38\cumulus$\Software\Services\Production or Development
+        /// </summary>
+        /// <param name="serviceInterface"></param>
+        /// <param name="serviceClass"></param>
+        /// <param name="port"></param>
+        /// <param name="locator"></param>
+        /// <param name="multipleInstance">If you have multplie instances of your service running (one per machine) set this to true.  Means the end point is written to a folder on the share with and end point file based on the machine name.</param>
+        /// <returns></returns>
+        public static ServiceHost getServiceHost(Type serviceInterface, Type serviceClass, int port, IServiceLocator locator, bool multipleInstance = false, bool reliable = false)
+        {
+            return getServiceHost(serviceInterface, serviceClass, port, locator, null, multipleInstance, reliable);
+        }
+
+        /// <summary>
+        /// This helper function uses the environment on the machine to setup
+        /// an appropriate service host for that environment. You should use this
+        /// to create the service host for a WCF server in an environment-safe way.
+        /// </summary>
+        /// <param name="serviceInterface">The service contract interface this service will offer</param>
+        /// <param name="serviceClass">If parameter ServiceClassInsances is not set, this is the type used when the ServicesHost is constructed.</param>
+        /// <param name="port"></param>
+        /// <param name="locator"></param>
+        /// <param name="serviceClassInstance">The service can be started with an explicitly created WCF service object (if this is set, the serviceClass parameter is not used to create the service)</param>
+        /// <returns></returns>
+        public static ServiceHost getServiceHost(Type serviceInterface, Type serviceClass, int port, IServiceLocator locator, object serviceClassInstance, bool multipleInstance = false, bool reliable = false)
+        {
+            try
+            {
+                log.Info("Creating service host:  Interface: [" + serviceInterface + "] Service Class: [" +
+                            serviceClass + "] Port: [" + port + "] Locator: [" + locator + "]");
+
+                string baseAddress = formatTCPBaseAddress(serviceClass.Name, port);
+                string fullAddress = baseAddress + "/" + serviceInterface.Name;
+
+                log.Info("Creating service host");
+                //////////////////////////////////////////////
+                ServiceHost serviceHost = null;
+                serviceHost = serviceClassInstance == null ? new ServiceHost(serviceClass, new Uri(baseAddress)) : new ServiceHost(serviceClassInstance, new Uri(baseAddress));
+
+                //TimeSpan o = serviceHost.OpenTimeout;
+                //TimeSpan c = serviceHost.CloseTimeout;
+
+                log.Info("End point is at [" + fullAddress + "]");
+                NetTcpBinding b = new NetTcpBinding(SecurityMode.None);
+                //  b.PortSharingEnabled = true;
+
+                TimeSpan a1 = b.CloseTimeout;
+                TimeSpan a2 = b.OpenTimeout;
+                TimeSpan a3 = b.ReceiveTimeout;
+                TimeSpan a4 = b.SendTimeout;
+
+                b.ReceiveTimeout = TimeSpan.MaxValue;
+                b.MaxReceivedMessageSize = 65526 * 10000;
+
+                //Added by Charles
+
+                b.MaxBufferPoolSize = 65526 * 10000;
+                b.MaxBufferSize = 65526 * 10000;
+                b.MaxConnections = 500;
+
+
+                if (reliable)
+                {
+                    log.Debug($"{serviceInterface.Name} reliability is turned ON.");
+                    b.SendTimeout = new TimeSpan(0, 0, 0, 45);
+                    b.ReliableSession.Enabled = true;
+                    b.Security = new NetTcpSecurity
+                    {
+                        Mode = SecurityMode.None
+                    };
+                    // b.ReliableSession.InactivityTimeout = TimeSpan.MaxValue;
+                }
+                else
+                {
+                    log.Debug($"{serviceInterface.Name} reliability is turned OFF.");
+                }
+
+                //////////////////////////////////////////////
+                CustomBinding newBinding = new CustomBinding(b);
+
+                // TODO: testing out the real time weather with compression.
+                // Note: both client and server must have this switched on else exceptions will be thrown.
+                if (serviceClass.ToString() == "DistributionServiceWindowsServiceHost.RealTimeWeatherDistributionService")
+                {
+                    log.Info("Switching on GZIP compression");
+                    BinaryMessageEncodingBindingElement binaryEncoder = newBinding.Elements.Find<BinaryMessageEncodingBindingElement>();
+                    binaryEncoder.CompressionFormat = CompressionFormat.GZip;
+                }
+                else
+                    log.Info("NO GZIP compression configured");
+
+                TcpTransportBindingElement tcpBE = newBinding.Elements.Find<TcpTransportBindingElement>();
+                
+                // It looks from documentation like you can set these timeouts from the client side, but 
+                // it doesn't work - had to set these on the orderouting server.  Leaving this code here
+                // for future reference.
+                log.Info("Setting LeaseTimeout to max value");
+                //tcpBE.ConnectionPoolSettings.LeaseTimeout =  new TimeSpan(0,0,2,0);
+                tcpBE.ConnectionPoolSettings.LeaseTimeout = TimeSpan.MaxValue;
+                log.Info("Setting IdleTimeout to max value");
+                //tcpBE.ConnectionPoolSettings.IdleTimeout = new TimeSpan(0, 0, 2, 0);
+                tcpBE.ConnectionPoolSettings.IdleTimeout = TimeSpan.MaxValue;
+                tcpBE.ConnectionPoolSettings.MaxOutboundConnectionsPerEndpoint = 1000;
+
+                serviceHost.AddServiceEndpoint(serviceInterface, b, serviceInterface.Name);
+
+                // get all the endpoint/binding/transport quotes etc
+                log.Debug("NetTcpBinding Settings:");
+                foreach (KeyValuePair<string, string> kv in b.GetQuotas())
+                {
+                    log.Debug($"\t{kv.Key} = [{kv.Value}]");
+                }
+
+                log.Debug("TcpTransportBindingElement Settings:");
+                foreach (KeyValuePair<string, string> kv in tcpBE.GetQuotas())
+                {
+                    log.Debug($"\t{kv.Key} = [{kv.Value}]");
+                }
+
+                log.Info("Advertising end point (possibly)");
+                locator.AdvertiseEndPoint(serviceHost, multipleInstance);
+                return serviceHost;
+            }
+            catch (Exception ex)
+            {
+                string errorMsg = "Track E: An application error occurred (not in windows thread). Please contact support " +
+                    "with the following information:\n\n";
+                log.Error(errorMsg + ex.GetExceptionMessage());
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Start a service generically for classes with WCFStartAttributes attached.
+        /// 
+        /// Supply a service name and the executing assembly and add a WCFStartAttribute to your class and this
+        /// will hunt down your class and start it up finding the wcf service interface and port from the attribute.
+        /// </summary>
+        /// <param name="serviceName"></param>
+        /// <param name="assemblyWCFService"></param>
+        /// <returns></returns>
+        public static ServiceHost RunService(string serviceName, Assembly assemblyWCFService, Assembly underlyingService = null)
+        {
+            AppDomain.CurrentDomain.UnhandledException += CSharpUtils.Other.ExceptionUtils.CurrentDomain_UnhandledException;
+
+            //log4net.Config.XmlConfigurator.Configure();
+            log.Info("ServiceComponent.Initialise");
+            ServiceComponent.Initialise(serviceName);
+
+            log.Info("RunService:  Service Starting [" + serviceName + "]");
+
+            // Get the WCF Service class and create a service host and open it.
+            var distributionClasses = assemblyWCFService.GetTypes().Where(t => t.IsClass && t.IsDefined(typeof(WCFStartAttribute))).ToList();
+            distributionClasses.ForEach(x => log.Debug(x.FullName));
+
+            var selectedDS = distributionClasses.FirstOrDefault(ds => ds.Name == serviceName);
+            //var starterAttribute = selectedDS.Attributes.GetAttribute<DistributionStartAttribute>();
+            log.Info("Here");
+
+            var starterAttribute = (WCFStartAttribute)Attribute.GetCustomAttribute(selectedDS, typeof(WCFStartAttribute));
+            ServiceHost host = WCFServerHelper.getServiceHost(starterAttribute.ServiceInterface, selectedDS, starterAttribute.Port,
+                new SingletonFileConfigServiceLocator(starterAttribute.ServiceInterface), false, IsReliableService(serviceName));
+
+            var dsInstance = Activator.CreateInstance(selectedDS);
+            log.Debug("Creating [" + selectedDS.Name + "]");
+            log.Debug("Calling Start on [" + selectedDS.Name + "]");
+            ((IStarter)dsInstance).Start();
+
+            log.Info("Calling Host.Open");
+            //Task.Run(() => host.Open());
+            host.Open();
+
+            //log.Info("Check underlying service[" + starterAttribute.UnderlyingService + "]");
+            //if (starterAttribute.UnderlyingService != null)
+            //{
+            //    log.Debug("Calling Start if we can find it...");
+            //    var underlyingClass = underlyingService.GetTypes().FirstOrDefault(t => t.IsClass && t.Name == starterAttribute.UnderlyingService.Name);
+            //    underlyingClass.Dump();
+            //    log.Debug("Creating [" + underlyingClass.Name + "]");
+            //    var instance = Activator.CreateInstance(underlyingClass);
+            //    log.Debug("Calling Start on [" + underlyingClass.Name + "]");
+            //    ((IStarter)instance).Start();
+            //}
+
+            log.Debug("Exit");
+            return host;
+        }
+
+        public static bool IsReliableService(string serviceName)
+        {
+            if (serviceName == "RealTimeWeatherDistributionService" || serviceName == "ModelSTOutputDistributionService" || serviceName == "ModelLTOutputDistributionService")
+            {
+                return true;
+            }
+            return false;
+        }
