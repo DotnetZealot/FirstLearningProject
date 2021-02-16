@@ -1,205 +1,132 @@
-        private static readonly ILog log = LogManager.GetLogger(typeof(SingletonFileConfigServiceLocator));
-        private readonly Env _machineEnvironment = new Env();
+        private readonly Environments _machineEnv;
+        public Environments MachineEnv { get { return _machineEnv; } }
+        private static ILog _logger = LogManager.GetLogger(typeof(Environment));
+        public static bool _haveShownFirstMessages = false;
 
-        // DAW 2015-08-04 - refactored into CSharpUtils.Config.Env class
-        //private const string AlternativeBaseFolder = @"c:\temp\";
-        private readonly Type _serviceInterface;
-        private readonly string _baseAddress;
-
-        /// <summary>
-        /// Constructor sets up the necessary parameters
-        /// </summary>
-        /// <param name="serviceInterface"></param>
-        /// <param name="baseAddress"></param>
-        public SingletonFileConfigServiceLocator(Type serviceInterface, string baseAddress, bool RunAgainstProduction = false)
+        private static Env _instance;
+        public static Env Instance
         {
-            _overrideAndRunAgainstProduction = RunAgainstProduction;
-            _serviceInterface = serviceInterface;
-            _baseAddress = baseAddress;
-        }
-
-        /// <summary>
-        /// Client-side constructor
-        /// </summary>
-        /// <param name="serviceInterface"></param>
-        /// <param name="RunAgainstProduction">In development you might want one service to be sourced from production. Better not to do this bntu have a dev environment !</param>
-        /// <param name="subaddress">Allows you to run multiple services instances over a network - this sub address is usually the machine name so you can run one instance per machine.</param>
-        public SingletonFileConfigServiceLocator(Type serviceInterface, bool RunAgainstProduction = false)
-        {
-            log.Debug($"against prod {RunAgainstProduction}");
-            _overrideAndRunAgainstProduction = RunAgainstProduction;
-            _serviceInterface = serviceInterface;
-            _baseAddress = null;
-        }
-
-        /// <summary>
-        /// In dev its possible you may want to run agaisnt productino static data.
-        /// This is not ideal, and until we have a decent dev/uat environment we're forced down thsi route !
-        /// </summary>
-        private bool _overrideAndRunAgainstProduction = false;
-        
-
-        /// <summary>
-        /// Advertise the end point out to flat file on the share
-        /// </summary>
-        /// <param name="host">The host service that just got created.</param>
-        /// <param name="multipleInstance">If true, there can be multiple instances of this service, so a folder with the interface
-        /// name will be created and under that a file for each instance based on the host name.  i.e. so you can only have one instance per
-        /// machine.</param>
-        public void AdvertiseEndPoint(ServiceHost host, bool multipleInstance = false)
-        {
-            log.Debug($"AdvertiseEndPoint Num Endpoints {host.Description.Endpoints}");
-            foreach (ServiceEndpoint endpoint in host.Description.Endpoints)
+            get
             {
-                string filename;
-                if (multipleInstance)
-                {
-                    string machine = endpoint.Address.Uri.Host.Before(".");
-                    string baseFolder = Path.Combine(getConfigFileBase().ToString(), endpoint.Contract.Name);
-                    Directory.CreateDirectory(baseFolder);
-                    filename = Path.Combine(baseFolder, machine + ".txt");
-                }
-                else
-                {
-                    filename = Path.Combine(getConfigFileBase().ToString(), endpoint.Contract.Name + ".txt");
-                }
+                if (_instance == null)
+                    _instance = new Env();
+                return _instance;
+            }
+        }
 
-                log.Debug($"Filename is {filename} exists {File.Exists(filename)} Dev ? {(new CSharpUtils.Config.Env()).Development}");
-                if (!File.Exists(filename) || (new CSharpUtils.Config.Env()).Development)
-                {
-                    log.Info("Writing out service end points to [" + filename + "]");
+        public Env()
+        {
+            _wcfServiceFolderOverride = ConfigurationManager.AppSettings["WCFServiceFolderOverride"];
 
-                    using (var writer = new StreamWriter(filename))
-                    {
-                        log.Info("Writing  [" + endpoint.Address.Uri.AbsoluteUri + "]");
-                        writer.WriteLine(endpoint.Address.Uri.AbsoluteUri);
-                    }
-                }
+            _wcfServiceBaseFolder = ConfigurationManager.AppSettings["WCFServiceBaseFolder"];
+            if (string.IsNullOrEmpty(_wcfServiceBaseFolder))
+            {
+                // If not specified in the config file use the original default value
+                _wcfServiceBaseFolder = @""; // DO NOT CHANGE THIS HARD CODED I/P address - the haswell boxes are
             }
 
-        }
+            var configSetting = ConfigurationManager.AppSettings["Environment"];
+            if (configSetting == null)
+                throw new ApplicationException("The environment variable needs to be set - development or production");
 
-        /// <summary>
-        /// Need to remove the file we wrote
-        /// </summary>
-        /// <param name="serviceHost"></param>
-        public void cleanupService(ServiceHost serviceHost)
-        {
-            log.DebugFormat("Cleaning up in environment {0}.", _machineEnvironment);
-            var configFile = getConfigFile();
-            if (configFile.Exists)
+            if (!_haveShownFirstMessages)
+                _logger.DebugFormat("Found env {0}. overrides env var.", configSetting);
+            if (Environments.TryParse(configSetting, out _machineEnv))
             {
-                log.DebugFormat("Will read from config file {0}.", configFile.FullName);
+
+                if (!_haveShownFirstMessages)
+                    _logger.DebugFormat("Environment from configuration {0}.", _machineEnv);
             }
             else
             {
-                log.ErrorFormat("Service configuration file {0} does not exist - cannot cleanup.", configFile);
+                _logger.WarnFormat("Environment being set through config, don't know setting ({0})", configSetting);
+                throw new ApplicationException("The environment variable isn't correct - should be 'Development' or 'Production' and is in fact [" + configSetting + "]");
             }
-            using (var reader = new StreamReader(configFile.FullName))
-            {
-                var line = reader.ReadLine();
-                if (line != null)
-                {
-                    if (line.Equals(_baseAddress))
-                    {
-                        log.DebugFormat("Found matching configuration line. Will delete file {0}.", configFile.FullName);
-                        reader.Close();
-                        try
-                        {
-                            configFile.Delete();
-                            log.DebugFormat("File {0} deleted.", configFile.FullName);
-                        }
-                        catch (Exception e)
-                        {
-                            log.Error(string.Format("Exception deleting configuration file {0}.", configFile.FullName), e);
-                        }
-                    }
-                    else
-                    {
-                        log.WarnFormat("Found different line ({0}) in file ({1}). Will not delete.", line, configFile.FullName);
-                    }
-                }
-                else
-                {
-                    log.ErrorFormat("The configuration file {0} was empty.", configFile.FullName);
-                }
-            }
+            _haveShownFirstMessages = true;
         }
 
-        private string GetBaseFolder()
-        {
-            string  pathSuffix = "";
-            if (_overrideAndRunAgainstProduction)
-            {
-                log.Warn("You are running this service against production !!!");
-                pathSuffix = "Production" + Path.DirectorySeparatorChar;
-            }
-            else
-            {
-                pathSuffix = _machineEnvironment.ToString() + Path.DirectorySeparatorChar;
-                if (_machineEnvironment.Development)
-                    pathSuffix = pathSuffix + (_machineEnvironment.WCFServiceFolderOverride ?? Environment.UserName) + Path.DirectorySeparatorChar;
-                // log.Debug("Suffix is [" + (pathSuffix ?? "NULL") + "]");
-            }
-            var fullPath = _machineEnvironment.WCFServiceBaseFolder + pathSuffix;
+        private string _wcfServiceBaseFolder;
 
-            if (Directory.Exists(_machineEnvironment.WCFServiceBaseFolder))   // accessing network path ok?
-            {
-                var directory = Directory.CreateDirectory(fullPath);
-                //log.Info("WCFS Service Locator folder is [" + directory.FullName + "]");
-                return directory.FullName;
-            }
-            return null;
-        }
-
-        private FileInfo getConfigFile(string machine = "")
+        /// <summary>
+        /// The shared folder for the WCFServiceLocater. Specify in app.config i.e. 
+        /// to override the default
+        /// </summary>
+        public string WCFServiceBaseFolder
         {
-            string interfaceName = _serviceInterface.UnderlyingSystemType.Name;
-            if (_serviceInterface.UnderlyingSystemType.IsGenericType)
-                interfaceName = interfaceName.Split('`')[0] + "Of_" + string.Join("_", _serviceInterface.GenericTypeArguments.Select(gt => gt.Name));
-            var fileName = "";
-            if (machine == "")
-                fileName = GetBaseFolder() + interfaceName + ".txt";
-            else
-                fileName = GetBaseFolder() + interfaceName + @"\" + machine + ".txt";
-            return new FileInfo(fileName);
-        }
-
-        private FileInfo getConfigFileBase()
-        {
-            var fileName = GetBaseFolder();
-            return new FileInfo(fileName);
+            get { return _wcfServiceBaseFolder; }
         }
 
         /// <summary>
-        /// Find all services advertising themselves on the network
+        /// If alterative folder for WCFServiceLocater when WCFServiceBaseFolder is unreachable
         /// </summary>
-        /// <typeparam name="T"></typeparam>
+        public string WCFServiceAlternativeBaseFolder
+        {
+            get { return @"c:\temp\"; }
+            // Should we return System.IO.Path.GetTempPath(); or 
+            // Environment.GetEnvironmentVariable("temp", EnvironmentVariableTarget.Machine);  ?
+        }
+
+        private string _wcfServiceFolderOverride;
+        /// <summary>
+        /// service.  e.g. put this in your app.config <add key="WCFServiceFolderOverride" value="steve.adams" />
+        /// </summary>
+        public string WCFServiceFolderOverride
+        {
+            get { return _wcfServiceFolderOverride; }
+        }
+
+
+
+        public override string ToString()
+        {
+            return _machineEnv.ToString();
+        }
+
+        public bool Development { get { return _machineEnv == Environments.Development; } }
+        public bool Production { get { return _machineEnv == Environments.Production; } }
+
+        /// <summary>
+        /// Get prod or dev database connection string.
+        /// </summary>
         /// <returns></returns>
-        public IEnumerable<EndpointAddress> getEndpointAddress<T>()
+        public string DBConnectionName(string dbid)
         {
-            var addresses = new List<EndpointAddress>();
-            var configFile = getConfigFile();
-            if (!configFile.Exists)
+            return dbid + (Development ? "Dev" : "Prod");
+        }
+
+        public string ConnectionString(string dbId)
+        {
+            return ConfigurationManager.ConnectionStrings[DBConnectionName(dbId)].ConnectionString;
+        }
+
+        private static DateTime _runDate;
+        private static bool _runDateOverride = false;
+        public static DateTime Today
+        {
+            get
             {
-                log.ErrorFormat("Service configuration file {0} does not exist!.", configFile);
-                return addresses;
+                if (_runDateOverride)
+                    return _runDate;
+                return DateTime.Today;
             }
-
-            addresses.Add(new EndpointAddress(System.IO.File.ReadAllLines(configFile.FullName)[0]));
-            return addresses;
+            set
+            {
+                _runDate = value.Date;
+                _runDateOverride = true;
+            }
         }
 
-
-        public EndpointAddress getEndpointAddress<T>(string machine)
+        public static DateTime Now
         {
-            return new EndpointAddress(File.ReadAllLines(getConfigFile(machine).FullName)[0]);
-        }
-
-        public string getFirstEndpointAddress<T>()
-        {
-            var endpointList = getEndpointAddress<T>().ToList();
-            if (endpointList.Count == 0)
-                throw new Exception("Can't locate endpoint for [" + typeof(T).ToString() + "] in [" + new Env().MachineEnv + "]");
-            return endpointList[0].Uri.ToString();
+            get
+            {
+                if (_runDateOverride)
+                    return _runDate;
+                return DateTime.Now;
+            }
+            set
+            {
+                _runDate = value;
+                _runDateOverride = true;
+            }
         }
