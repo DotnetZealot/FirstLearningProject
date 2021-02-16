@@ -1,132 +1,488 @@
-        private readonly Environments _machineEnv;
-        public Environments MachineEnv { get { return _machineEnv; } }
-        private static ILog _logger = LogManager.GetLogger(typeof(Environment));
-        public static bool _haveShownFirstMessages = false;
-
-        private static Env _instance;
-        public static Env Instance
+    public static ChangeResult<TSource> CompareTo<TSource, TKey>(this IEnumerable<TSource> local, IEnumerable<TSource> remote, Func<TSource, TKey> keySelector)
         {
-            get
+            if (local == null)
+                throw new ArgumentNullException("local");
+            if (remote == null)
+                throw new ArgumentNullException("remote");
+            if (keySelector == null)
+                throw new ArgumentNullException("keySelector");
+
+            var remoteKeyValues = remote.ToDictionary(keySelector);
+
+            var deleted = new List<TSource>();
+            var changed = new List<TSource>();
+            var localKeys = new HashSet<TKey>();
+
+            foreach (var localItem in local)
             {
-                if (_instance == null)
-                    _instance = new Env();
-                return _instance;
+                var localKey = keySelector(localItem);
+                localKeys.Add(localKey);
+
+                /* Check if primary key exists in both local and remote 
+                 * and if so check if changed, if not it has been deleted
+                 */
+                TSource changeCandidate;
+                if (remoteKeyValues.TryGetValue(localKey, out changeCandidate))
+                {
+                    if (!changeCandidate.Equals(localItem))
+                        changed.Add(changeCandidate);
+                }
+                else
+                {
+                    deleted.Add(localItem);
+                }
+            }
+            var inserted = remoteKeyValues
+                            .Where(x => !localKeys.Contains(x.Key))
+                            .Select(x => x.Value)
+                            .ToList();
+
+            return new ChangeResult<TSource>(deleted, changed, inserted);
+        }
+
+
+
+
+    // Deep clone - needs testing....
+    public static T DeepClone<T>(this object a, IEnumerable<Type> types = null)
+    {
+        var x = new DataContractSerializer(typeof(T), types);
+        var memStream = new MemoryStream();
+
+        x.WriteObject(memStream, a);
+        memStream.Position = 0;
+        return (T)x.ReadObject(memStream);
+
+    }
+
+    /// <summary>
+    /// Simple sanity check as you build up a csv file - counts the commas on each line
+    /// and makes sure there is the same number on each line.
+    /// </summary>
+    /// <param name="lines"></param>
+    public static bool CheckCommaCount(this IEnumerable<string> lines)
+    {
+        // Sanity check on the number of commas.
+        var counts = lines.Select((l, i) => new { count = l.Count(c => c == ','), i }).ToList();
+        var distinct = counts.Select(c => c.count).Distinct().ToList();
+
+        return (distinct.Count() == 1);
+    }
+
+
+    /// <summary>
+    /// Simple sanity check as you build up a csv file - counts the commas on each line
+    /// and makes sure there is the same number on each line.
+    /// </summary>
+    /// <param name="lines"></param>
+    public static bool CheckCommaCount(this string lines)
+    {
+        return lines.Split(new string[] { Environment.NewLine }, StringSplitOptions.None)
+            .Where(l => l.Count() > 0)
+            .CheckCommaCount();
+    }
+
+
+    public static T Deserialise<T>(this string a, IEnumerable<Type> types = null)
+    {
+        var x = new DataContractSerializer(typeof(T), types);
+        var memStream = new System.IO.MemoryStream(System.Text.Encoding.UTF8.GetBytes(a));
+    
+        T hydratedObject = (T)x.ReadObject(memStream);
+        return hydratedObject;
+    }
+    
+    // Deep clone - needs testing....
+    public static string Serialise<T>(this object a, IEnumerable<Type> types = null)
+    {
+        var x = new DataContractSerializer(typeof(T), types);
+        var memStream = new MemoryStream();
+
+        x.WriteObject(memStream, a);
+        memStream.Position = 0;
+        return Encoding.ASCII.GetString(memStream.ToArray());
+    }
+
+    //// Deep clone - needs testing....
+    //// This was the original deep clone serialiser but it used the xml serialiser which isn't reocmmended.
+    //// This is because lots of .net framework classes are not compatilbe with it and cannot be serialised (DateTimeOffset for example)
+    //// See  https://social.msdn.microsoft.com/Forums/en-US/d72e545f-ea48-48d8-ac91-6c7308715d5f/datetimeoffset-doesnt-seem-to-serialize-fromto-xml?forum=xmlandnetfx
+    //public static T DeepClone<T>(this object a)
+    //{
+    //    // This throws but ignores FileNotFoundException, its an issue inside the framework 
+    //    // that has no fix yet 
+    //    // see http://stackoverflow.com/questions/1127431/xmlserializer-giving-filenotfoundexception-at-constructor
+    //    var x = new System.Xml.Serialization.XmlSerializer(typeof(T));
+    //    var sw = new StringWriter();
+
+    //    x.Serialize(sw, a);
+    //    return (T)x.Deserialize(new StringReader(sw.ToString()));
+
+    //}
+
+    /// <summary>
+    /// True if your string exactly matches one of the strings in the list.
+    /// </summary>
+    /// <param name="s"></param>
+    /// <param name="list"></param>
+    /// <returns></returns>
+    public static bool IsAnyOf(this string s, params string[] list)
+    {
+        return list.Contains(s);
+    }
+
+    /// <summary>
+    /// Filter list to those of type T2.  Where this is the most derived type in a type hierarchy.
+    /// T2 derives from T1
+    /// </summary>
+    /// <typeparam name="T1"></typeparam>
+    /// <typeparam name="T2"></typeparam>
+    /// <param name="list"></param>
+    /// <returns></returns>
+    public static IEnumerable<T1> OfLType<T1, T2>(this List<T2> list)
+    {
+        return list.Where(u => u.GetType() == typeof(T1)).Cast<T1>(); ;
+    }
+
+    public static IEnumerable<T2> OfLeafType<T1, T2>(this List<T1> list)
+    {
+        return list.Where(u => u.GetType() == typeof(T2)).Cast<T2>(); ;
+    }
+
+    public static T TailElement<T>(this List<T> list, int n = 1)
+    {
+        return list.Skip(list.Count - n).First();
+    }
+
+    /// <summary>
+    /// Select a single random element from a collection
+    /// </summary>
+    public static T PickRandom<T>(this IEnumerable<T> source)
+    {
+        return source.PickRandom(1).Single();
+    }
+
+    /// <summary>
+    /// Select random elements from a collection
+    /// </summary>
+    public static IEnumerable<T> PickRandom<T>(this IEnumerable<T> source, int count)
+    {
+        return source.Shuffle().Take(count);
+    }
+    /// <summary>
+    /// Randomly shuffle a collection
+    /// </summary>
+    public static IEnumerable<T> Shuffle<T>(this IEnumerable<T> list)
+    {
+        List<T> newList = list.ToList();
+        int n = newList.Count;
+        while (n > 1)
+        {
+            n--;
+            int k = ThreadSafeRandom.ThisThreadsRandom.Next(n + 1);
+            T value = newList[k];
+            newList[k] = newList[n];
+            newList[n] = value;
+        }
+
+        return newList;
+    }
+
+    public static string SafeGetByIndex(this IReadOnlyList<string> source, int index, string defaultValue = null)
+    {
+        var value = source == null || source.Count <= index ? null : source[index];
+        return string.IsNullOrWhiteSpace(value) ? defaultValue : value.Trim();
+    }
+
+    /// <summary>
+    /// True if your string contains any of the strings in the list.
+    /// </summary>
+    /// <param name="s"></param>
+    /// <param name="list"></param>
+    /// <returns></returns>
+    public static bool ContainsAnyOf(this string s, params string[] list)
+    {
+        return list.Any(txt => s.Contains(txt));
+    }
+
+    public static bool IsEven(this int x)
+    {
+        return x % 2 == 0;
+    }
+
+    public static bool IsOdd(this int x)
+    {
+        return x % 2 == 1;
+    }
+
+    /// <summary>
+    /// Same as TryParse except it returns zero if the text deosn't can't be parsed into an int.
+    /// </summary>
+    /// <param name="text"></param>
+    /// <returns></returns>
+    public static int TryParseIntDefault(this string text)
+    {
+        int result = 0;
+        int.TryParse(text, out result);
+        return result;
+    }
+
+    /// <summary>
+    /// Are we just passed the time by the number of seconds specified.  
+    /// </summary>
+    /// <param name="time"></param>
+    /// <param name="seconds"></param>
+    /// <returns></returns>
+    public static bool IsRecent(this TimeSpan time, int seconds, TimeZoneInfo tz)
+    {
+        var today = Env.Today;
+        DateTime triggerTime = new DateTime(today.Year, today.Month, today.Day, time.Hours, time.Minutes, 0, DateTimeKind.Unspecified);
+
+        var timeNowInTargetTimeZone = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
+        return (timeNowInTargetTimeZone - new TimeSpan(0, 0, seconds)) < triggerTime && triggerTime < timeNowInTargetTimeZone;
+    }
+
+    /// <summary>
+    /// For the timezone specified, is the time older than 'seconds' seconds ago.
+    /// </summary>
+    /// <param name="time"></param>
+    /// <param name="seconds"></param>
+    /// <param name="tz"></param>
+    /// <returns></returns>
+    public static bool OlderThan(this TimeSpan time, TimeSpan period, TimeZoneInfo tz)
+    {
+        var today = Env.Today;
+        DateTime triggerTime = new DateTime(today.Year, today.Month, today.Day, time.Hours, time.Minutes, 0, DateTimeKind.Unspecified);
+
+        var timeNowInTargetTimeZone = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
+        return triggerTime < (timeNowInTargetTimeZone - period);
+    }
+
+    /// <summary>
+    /// integer date format is in the form:  yyyyMMdd  (8 digits/characters)
+    /// example:  19581115 = 15/11/1958  ::  15 (day), 11 (month), 1958 (year)
+    /// </summary>
+    /// <param name="intDate">date string as from data source file</param>
+    /// <returns>Date</returns>
+    public static DateTime ParseIntDate(this string intDate)
+    {
+        if (intDate.Length != 8) throw new InvalidDataException("Date (as yyyyMMdd integer) not the expected string length of 8");
+
+        int date;
+
+        if (int.TryParse(intDate, out date))
+        {
+            int day = date % 100;
+            int month = (date / 100) % 100;
+            int year = date / 10000;
+
+            DateTime dateTime = new DateTime(year, month, day);
+
+            return dateTime;
+        }
+        else
+            throw new InvalidDataException(string.Format("Cannot parse to int: {0}", intDate));
+    }
+
+    public static String FirstLine(this string value)
+    {
+        int posA = value.IndexOf(Environment.NewLine);
+        if (posA == -1)
+            return value;
+        return value.Substring(0, posA);
+    }
+
+    public static String LastLine(this string value)
+    {
+        int lastButOnenNewline = 0;
+        for (int i = value.Length - 3; i > 0; i--)
+        {
+            if (value.Substring(i, 2) == Environment.NewLine)
+            {
+                lastButOnenNewline = i;
+                break;
             }
         }
 
-        public Env()
-        {
-            _wcfServiceFolderOverride = ConfigurationManager.AppSettings["WCFServiceFolderOverride"];
+        var lastLine = value.Substring(lastButOnenNewline + 2);
 
-            _wcfServiceBaseFolder = ConfigurationManager.AppSettings["WCFServiceBaseFolder"];
-            if (string.IsNullOrEmpty(_wcfServiceBaseFolder))
-            {
-                // If not specified in the config file use the original default value
-                _wcfServiceBaseFolder = @""; // DO NOT CHANGE THIS HARD CODED I/P address - the haswell boxes are
-            }
+        return lastLine;
+    }
 
-            var configSetting = ConfigurationManager.AppSettings["Environment"];
-            if (configSetting == null)
-                throw new ApplicationException("The environment variable needs to be set - development or production");
+    /// <summary>
+    /// Get string value before first 'a'.
+    /// </summary>
+    public static String Before(this string value, string a, int count=1)
+    {
+        int posA = -1;
+        for (int i =0; i < count; i++)
+            posA = value.IndexOf(a, posA+1);
 
-            if (!_haveShownFirstMessages)
-                _logger.DebugFormat("Found env {0}. overrides env var.", configSetting);
-            if (Environments.TryParse(configSetting, out _machineEnv))
-            {
+        if (posA == -1)
+            return value;
+        return value.Substring(0, posA);
+    }
 
-                if (!_haveShownFirstMessages)
-                    _logger.DebugFormat("Environment from configuration {0}.", _machineEnv);
-            }
-            else
-            {
-                _logger.WarnFormat("Environment being set through config, don't know setting ({0})", configSetting);
-                throw new ApplicationException("The environment variable isn't correct - should be 'Development' or 'Production' and is in fact [" + configSetting + "]");
-            }
-            _haveShownFirstMessages = true;
-        }
+    /// <summary>
+    /// Get string value after last 'a'
+    /// </summary>
+    public static String After(this string value, string a)
+    {
+        int posA = value.LastIndexOf(a);
+        if (posA == -1)
+            return String.Empty;
 
-        private string _wcfServiceBaseFolder;
+        int adjustedPosA = posA + a.Length;
+        if (adjustedPosA >= value.Length)
+            return String.Empty;
 
-        /// <summary>
-        /// The shared folder for the WCFServiceLocater. Specify in app.config i.e. 
-        /// to override the default
-        /// </summary>
-        public string WCFServiceBaseFolder
-        {
-            get { return _wcfServiceBaseFolder; }
-        }
+        return value.Substring(adjustedPosA);
+    }
 
-        /// <summary>
-        /// If alterative folder for WCFServiceLocater when WCFServiceBaseFolder is unreachable
-        /// </summary>
-        public string WCFServiceAlternativeBaseFolder
-        {
-            get { return @"c:\temp\"; }
-            // Should we return System.IO.Path.GetTempPath(); or 
-            // Environment.GetEnvironmentVariable("temp", EnvironmentVariableTarget.Machine);  ?
-        }
+    /// <summary>
+    /// Encapsulated Parse for Nullable<int>
+    /// </summary>
+    public static int? NullableInt(this string text)
+    {
+        int integer;
+        return int.TryParse(text, out integer) ? integer : (int?)null;
+    }
 
-        private string _wcfServiceFolderOverride;
-        /// <summary>
-        /// service.  e.g. put this in your app.config <add key="WCFServiceFolderOverride" value="steve.adams" />
-        /// </summary>
-        public string WCFServiceFolderOverride
-        {
-            get { return _wcfServiceFolderOverride; }
-        }
+    /// <summary>
+    /// Encapsulated Parse for Nullable<int>
+    /// </summary>
+    public static int? NullableInt(this string text, NumberStyles styles)
+    {
+        int integer;
+        return int.TryParse(text, styles, CultureInfo.InvariantCulture, out integer) ? integer : (int?)null;
+    }
 
+    /// <summary>
+    /// Encapsulated Parse for Nullable<DateTime>
+    /// </summary>
+    public static DateTime? NullableDateParse(this string text)
+    {
+        DateTime date;
+        return DateTime.TryParse(text, out date) ? date : (DateTime?)null;
+    }
 
+    /// <summary>
+    /// Encapsulated Parse for Nullable<DateTime>
+    /// </summary>
+    public static DateTime? NullableDateParseExact(this string text, string dateFormat, CultureInfo cultureInfo, DateTimeStyles dateTimeStyle)
+    {
+        DateTime date;
+        return DateTime.TryParseExact(text, dateFormat, cultureInfo, dateTimeStyle, out date) ? date : (DateTime?)null;
+    }
 
-        public override string ToString()
-        {
-            return _machineEnv.ToString();
-        }
+    /// <summary>
+    /// Performs an action on a list and returns the same list
+    /// </summary>
+    /// <typeparam name="T"></typeparam>
+    /// <param name="list"></param>
+    /// <param name="doSomething"></param>
+    /// <returns></returns>
+    public static List<T> DoList<T>(this List<T> list, Action<List<T>> doSomething)
+    {
+        doSomething(list);
+        return list;
+    }
 
-        public bool Development { get { return _machineEnv == Environments.Development; } }
-        public bool Production { get { return _machineEnv == Environments.Production; } }
+    /// <summary>
+    /// list = list * n
+    /// You can inflate a list up to n times its size.
+    /// </summary>
+    /// <typeparam name="T"></typeparam>
+    /// <param name="list"></param>
+    /// <param name="n"></param>
+    public static void Repeat<T>(this List<T> list, int n = 2)
+    {
+        var copy = list.ToList();
+        1.Range(n - 1).ForEach(x => list.AddRange(copy));
+    }
 
-        /// <summary>
-        /// Get prod or dev database connection string.
-        /// </summary>
-        /// <returns></returns>
-        public string DBConnectionName(string dbid)
-        {
-            return dbid + (Development ? "Dev" : "Prod");
-        }
+    public static void RepeatPercentage<T>(this List<T> list, int n = 2, int perc = 10)
+    {
+        var copy = list.ToList();
+        1.Range(n - 1).ForEach(x => list.AddRange(copy));
+    }
 
-        public string ConnectionString(string dbId)
-        {
-            return ConfigurationManager.ConnectionStrings[DBConnectionName(dbId)].ConnectionString;
-        }
+    /// <summary>
+    /// Returns the previous element in a list (if one exists)
+    /// </summary>
+    /// <typeparam name="T"></typeparam>
+    /// <param name="list"></param>
+    /// <param name="item"></param>
+    /// <returns></returns>
+    public static T Previous<T>(this List<T> list, T item)
+        where T : class
+    {
+        if (list == null || list.Count <= 1 || item == null)
+            return default(T);
 
-        private static DateTime _runDate;
-        private static bool _runDateOverride = false;
-        public static DateTime Today
-        {
-            get
-            {
-                if (_runDateOverride)
-                    return _runDate;
-                return DateTime.Today;
-            }
-            set
-            {
-                _runDate = value.Date;
-                _runDateOverride = true;
-            }
-        }
+        int previousIndex = list.IndexOf(item) - 1;
+        if (previousIndex < 0)
+            return default(T);
 
-        public static DateTime Now
-        {
-            get
-            {
-                if (_runDateOverride)
-                    return _runDate;
-                return DateTime.Now;
-            }
-            set
-            {
-                _runDate = value;
-                _runDateOverride = true;
-            }
-        }
+        return list[previousIndex];
+    }
+
+    /// <summary>
+    /// Returns a HashSet from a given IEnumerable
+    /// </summary>
+    /// <typeparam name="T">Collection elements' type</typeparam>
+    /// <param name="source">Current collection</param>
+    /// <returns></returns>
+    public static HashSet<T> ToHashSet<T>(this IEnumerable<T> source)
+    {
+        return new HashSet<T>(source);
+    }
+
+    public static string Description(this Enum value)
+    {
+        FieldInfo fi = value.GetType().GetField(value.ToString());
+        DescriptionAttribute[] attributes = (DescriptionAttribute[])fi.GetCustomAttributes(
+        typeof(DescriptionAttribute), false);
+        return attributes.Length > 0 ? attributes[0].Description : value.ToString();
+    }
+
+    /// <summary>
+    /// 
+    /// </summary>
+    /// <typeparam name="TEnum"></typeparam>
+    /// <param name="value"></param>
+    /// <returns></returns>
+    public static TEnum ToEnum<TEnum>(this object value)
+    {
+        return (TEnum)Enum.Parse(typeof(TEnum), value.ToString());
+    }
+
+    /// <summary>
+    /// 
+    /// </summary>
+    /// <typeparam name="TEnum"></typeparam>
+    /// <returns></returns>
+    public static List<KeyValuePair<TEnum, string>> ToKeyValuePairList<TEnum>()
+    {
+        return Enum.GetValues(typeof(TEnum))
+            .OfType<TEnum>()
+            .Select(en => new KeyValuePair<TEnum, string>(en, Description(en as Enum)))
+            .ToList();
+    }
+
+    /// <summary>
+    /// 
+    /// </summary>
+    /// <typeparam name="TEnum"></typeparam>
+    /// <returns></returns>
+    public static List<TEnum> ToList<TEnum>()
+    {
+        return Enum.GetValues(typeof(TEnum))
+            .OfType<TEnum>()
+            .ToList();
+    }
+
+    public static bool IsDefined<T>(string value)
+    {
+        return Enum.IsDefined(typeof(T), value);
+    }
