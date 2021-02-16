@@ -1,63 +1,205 @@
-        public static IDictionary<string, string> GetQuotas(this NetTcpBinding netTcpBinding)
+        private static readonly ILog log = LogManager.GetLogger(typeof(SingletonFileConfigServiceLocator));
+        private readonly Env _machineEnvironment = new Env();
+
+        // DAW 2015-08-04 - refactored into CSharpUtils.Config.Env class
+        //private const string AlternativeBaseFolder = @"c:\temp\";
+        private readonly Type _serviceInterface;
+        private readonly string _baseAddress;
+
+        /// <summary>
+        /// Constructor sets up the necessary parameters
+        /// </summary>
+        /// <param name="serviceInterface"></param>
+        /// <param name="baseAddress"></param>
+        public SingletonFileConfigServiceLocator(Type serviceInterface, string baseAddress, bool RunAgainstProduction = false)
         {
-            Dictionary<string, string> dict = new Dictionary<string, string>();
-            NetTcpBinding b = netTcpBinding;
-
-            dict.Add(nameof(b.CloseTimeout), b.CloseTimeout.ToString());
-            dict.Add(nameof(b.EnvelopeVersion), b.EnvelopeVersion.ToString());
-            dict.Add(nameof(b.HostNameComparisonMode), b.HostNameComparisonMode.ToString());
-            dict.Add(nameof(b.ListenBacklog), b.ListenBacklog.ToString());
-            dict.Add(nameof(b.MaxBufferPoolSize), b.MaxBufferPoolSize.ToString());
-            dict.Add(nameof(b.MaxBufferSize), b.MaxBufferSize.ToString());
-            dict.Add(nameof(b.MaxConnections), b.MaxConnections.ToString());
-            dict.Add(nameof(b.MaxReceivedMessageSize), b.MaxReceivedMessageSize.ToString());
-            dict.Add(nameof(b.MessageVersion), b.MessageVersion.ToString());
-            dict.Add(nameof(b.Name), b.Name.ToString());
-            dict.Add(nameof(b.Namespace), b.Namespace.ToString());
-            dict.Add(nameof(b.OpenTimeout), b.OpenTimeout.ToString());
-            dict.Add(nameof(b.PortSharingEnabled), b.PortSharingEnabled.ToString());
-            //dict.Add(nameof(b.ReaderQuotas), b.ReaderQuotas.ToString());  // this is for xml SOAP, ignore at the moment
-            dict.Add(nameof(b.ReceiveTimeout), b.ReceiveTimeout.ToString());
-            dict.Add("ReliableSession", "ReliableSession:");
-            dict.Add("\t" + nameof(b.ReliableSession.Enabled), b.ReliableSession.Enabled.ToString());
-            dict.Add("\t" + nameof(b.ReliableSession.InactivityTimeout), b.ReliableSession.InactivityTimeout.ToString());
-            dict.Add("\t" + nameof(b.ReliableSession.Ordered), b.ReliableSession.Ordered.ToString());
-            dict.Add(nameof(b.Scheme), b.Scheme.ToString());
-            dict.Add(nameof(b.Security), b.Security.ToString());
-            dict.Add(nameof(b.SendTimeout), b.SendTimeout.ToString());
-            dict.Add(nameof(b.TransactionFlow), b.TransactionFlow.ToString());
-            dict.Add(nameof(b.TransactionProtocol), b.TransactionProtocol.ToString());
-            dict.Add(nameof(b.TransferMode), b.TransferMode.ToString());
-
-            return dict;
+            _overrideAndRunAgainstProduction = RunAgainstProduction;
+            _serviceInterface = serviceInterface;
+            _baseAddress = baseAddress;
         }
 
-        public static IDictionary<string, string> GetQuotas(this TcpTransportBindingElement bindingElement)
+        /// <summary>
+        /// Client-side constructor
+        /// </summary>
+        /// <param name="serviceInterface"></param>
+        /// <param name="RunAgainstProduction">In development you might want one service to be sourced from production. Better not to do this bntu have a dev environment !</param>
+        /// <param name="subaddress">Allows you to run multiple services instances over a network - this sub address is usually the machine name so you can run one instance per machine.</param>
+        public SingletonFileConfigServiceLocator(Type serviceInterface, bool RunAgainstProduction = false)
         {
-            Dictionary<string, string> dict = new Dictionary<string, string>();
-            TcpTransportBindingElement b = bindingElement;
+            log.Debug($"against prod {RunAgainstProduction}");
+            _overrideAndRunAgainstProduction = RunAgainstProduction;
+            _serviceInterface = serviceInterface;
+            _baseAddress = null;
+        }
 
-            dict.Add(nameof(b.ChannelInitializationTimeout), b.ChannelInitializationTimeout.ToString());
-            dict.Add(nameof(b.ConnectionBufferSize), b.ConnectionBufferSize.ToString());
-            dict.Add("ConnectionPoolSettings", "ConnectionPoolSettings:");
-            dict.Add("\t" + nameof(b.ConnectionPoolSettings.GroupName), b.ConnectionPoolSettings.GroupName.ToString());
-            dict.Add("\t" + nameof(b.ConnectionPoolSettings.IdleTimeout), b.ConnectionPoolSettings.IdleTimeout.ToString());
-            dict.Add("\t" + nameof(b.ConnectionPoolSettings.LeaseTimeout), b.ConnectionPoolSettings.LeaseTimeout.ToString());
-            dict.Add("\t" + nameof(b.ConnectionPoolSettings.MaxOutboundConnectionsPerEndpoint), b.ConnectionPoolSettings.MaxOutboundConnectionsPerEndpoint.ToString());
-            dict.Add(nameof(b.ExtendedProtectionPolicy), b.ExtendedProtectionPolicy.ToString());
-            dict.Add(nameof(b.HostNameComparisonMode), b.HostNameComparisonMode.ToString());
-            dict.Add(nameof(b.ListenBacklog), b.ListenBacklog.ToString());
-            dict.Add(nameof(b.ManualAddressing), b.ManualAddressing.ToString());
-            dict.Add(nameof(b.MaxBufferPoolSize), b.MaxBufferPoolSize.ToString());
-            dict.Add(nameof(b.MaxBufferSize), b.MaxBufferSize.ToString());
-            dict.Add(nameof(b.MaxOutputDelay), b.MaxOutputDelay.ToString());
-            dict.Add(nameof(b.MaxPendingAccepts), b.MaxPendingAccepts.ToString());
-            dict.Add(nameof(b.MaxPendingConnections), b.MaxPendingConnections.ToString());
-            dict.Add(nameof(b.MaxReceivedMessageSize), b.MaxReceivedMessageSize.ToString());
-            dict.Add(nameof(b.PortSharingEnabled), b.PortSharingEnabled.ToString());
-            dict.Add(nameof(b.Scheme), b.Scheme.ToString());
-            dict.Add(nameof(b.TeredoEnabled), b.TeredoEnabled.ToString());
-            dict.Add(nameof(b.TransferMode), b.TransferMode.ToString());
+        /// <summary>
+        /// In dev its possible you may want to run agaisnt productino static data.
+        /// This is not ideal, and until we have a decent dev/uat environment we're forced down thsi route !
+        /// </summary>
+        private bool _overrideAndRunAgainstProduction = false;
+        
 
-            return dict;
+        /// <summary>
+        /// Advertise the end point out to flat file on the share
+        /// </summary>
+        /// <param name="host">The host service that just got created.</param>
+        /// <param name="multipleInstance">If true, there can be multiple instances of this service, so a folder with the interface
+        /// name will be created and under that a file for each instance based on the host name.  i.e. so you can only have one instance per
+        /// machine.</param>
+        public void AdvertiseEndPoint(ServiceHost host, bool multipleInstance = false)
+        {
+            log.Debug($"AdvertiseEndPoint Num Endpoints {host.Description.Endpoints}");
+            foreach (ServiceEndpoint endpoint in host.Description.Endpoints)
+            {
+                string filename;
+                if (multipleInstance)
+                {
+                    string machine = endpoint.Address.Uri.Host.Before(".");
+                    string baseFolder = Path.Combine(getConfigFileBase().ToString(), endpoint.Contract.Name);
+                    Directory.CreateDirectory(baseFolder);
+                    filename = Path.Combine(baseFolder, machine + ".txt");
+                }
+                else
+                {
+                    filename = Path.Combine(getConfigFileBase().ToString(), endpoint.Contract.Name + ".txt");
+                }
+
+                log.Debug($"Filename is {filename} exists {File.Exists(filename)} Dev ? {(new CSharpUtils.Config.Env()).Development}");
+                if (!File.Exists(filename) || (new CSharpUtils.Config.Env()).Development)
+                {
+                    log.Info("Writing out service end points to [" + filename + "]");
+
+                    using (var writer = new StreamWriter(filename))
+                    {
+                        log.Info("Writing  [" + endpoint.Address.Uri.AbsoluteUri + "]");
+                        writer.WriteLine(endpoint.Address.Uri.AbsoluteUri);
+                    }
+                }
+            }
+
+        }
+
+        /// <summary>
+        /// Need to remove the file we wrote
+        /// </summary>
+        /// <param name="serviceHost"></param>
+        public void cleanupService(ServiceHost serviceHost)
+        {
+            log.DebugFormat("Cleaning up in environment {0}.", _machineEnvironment);
+            var configFile = getConfigFile();
+            if (configFile.Exists)
+            {
+                log.DebugFormat("Will read from config file {0}.", configFile.FullName);
+            }
+            else
+            {
+                log.ErrorFormat("Service configuration file {0} does not exist - cannot cleanup.", configFile);
+            }
+            using (var reader = new StreamReader(configFile.FullName))
+            {
+                var line = reader.ReadLine();
+                if (line != null)
+                {
+                    if (line.Equals(_baseAddress))
+                    {
+                        log.DebugFormat("Found matching configuration line. Will delete file {0}.", configFile.FullName);
+                        reader.Close();
+                        try
+                        {
+                            configFile.Delete();
+                            log.DebugFormat("File {0} deleted.", configFile.FullName);
+                        }
+                        catch (Exception e)
+                        {
+                            log.Error(string.Format("Exception deleting configuration file {0}.", configFile.FullName), e);
+                        }
+                    }
+                    else
+                    {
+                        log.WarnFormat("Found different line ({0}) in file ({1}). Will not delete.", line, configFile.FullName);
+                    }
+                }
+                else
+                {
+                    log.ErrorFormat("The configuration file {0} was empty.", configFile.FullName);
+                }
+            }
+        }
+
+        private string GetBaseFolder()
+        {
+            string  pathSuffix = "";
+            if (_overrideAndRunAgainstProduction)
+            {
+                log.Warn("You are running this service against production !!!");
+                pathSuffix = "Production" + Path.DirectorySeparatorChar;
+            }
+            else
+            {
+                pathSuffix = _machineEnvironment.ToString() + Path.DirectorySeparatorChar;
+                if (_machineEnvironment.Development)
+                    pathSuffix = pathSuffix + (_machineEnvironment.WCFServiceFolderOverride ?? Environment.UserName) + Path.DirectorySeparatorChar;
+                // log.Debug("Suffix is [" + (pathSuffix ?? "NULL") + "]");
+            }
+            var fullPath = _machineEnvironment.WCFServiceBaseFolder + pathSuffix;
+
+            if (Directory.Exists(_machineEnvironment.WCFServiceBaseFolder))   // accessing network path ok?
+            {
+                var directory = Directory.CreateDirectory(fullPath);
+                //log.Info("WCFS Service Locator folder is [" + directory.FullName + "]");
+                return directory.FullName;
+            }
+            return null;
+        }
+
+        private FileInfo getConfigFile(string machine = "")
+        {
+            string interfaceName = _serviceInterface.UnderlyingSystemType.Name;
+            if (_serviceInterface.UnderlyingSystemType.IsGenericType)
+                interfaceName = interfaceName.Split('`')[0] + "Of_" + string.Join("_", _serviceInterface.GenericTypeArguments.Select(gt => gt.Name));
+            var fileName = "";
+            if (machine == "")
+                fileName = GetBaseFolder() + interfaceName + ".txt";
+            else
+                fileName = GetBaseFolder() + interfaceName + @"\" + machine + ".txt";
+            return new FileInfo(fileName);
+        }
+
+        private FileInfo getConfigFileBase()
+        {
+            var fileName = GetBaseFolder();
+            return new FileInfo(fileName);
+        }
+
+        /// <summary>
+        /// Find all services advertising themselves on the network
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <returns></returns>
+        public IEnumerable<EndpointAddress> getEndpointAddress<T>()
+        {
+            var addresses = new List<EndpointAddress>();
+            var configFile = getConfigFile();
+            if (!configFile.Exists)
+            {
+                log.ErrorFormat("Service configuration file {0} does not exist!.", configFile);
+                return addresses;
+            }
+
+            addresses.Add(new EndpointAddress(System.IO.File.ReadAllLines(configFile.FullName)[0]));
+            return addresses;
+        }
+
+
+        public EndpointAddress getEndpointAddress<T>(string machine)
+        {
+            return new EndpointAddress(File.ReadAllLines(getConfigFile(machine).FullName)[0]);
+        }
+
+        public string getFirstEndpointAddress<T>()
+        {
+            var endpointList = getEndpointAddress<T>().ToList();
+            if (endpointList.Count == 0)
+                throw new Exception("Can't locate endpoint for [" + typeof(T).ToString() + "] in [" + new Env().MachineEnv + "]");
+            return endpointList[0].Uri.ToString();
         }
